@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { 
@@ -21,7 +22,7 @@ import {
   Bell,
   RotateCcw,
   Calculator,
-  FolderOpen
+  FolderOpen,
 } from "lucide-react";
 
 const SIDEBAR_BG = "#0d47a1";        // Dark blue

@@ -292,21 +292,22 @@ const GroupLifeDetailsTab: React.FC<GroupLifeDetailsTabProps> = ({
   const showEndorseButton = sourcePage === "endorsements";
   const showDebitNoteButton = true;
 
-// Fetch group life details
+// Fetch group life details (ALL endorsements, newest first)
 const fetchDetail = async () => {
   if (!policyNo) return;
 
   setLoading(true);
   try {
     const token = localStorage.getItem("token") || sessionStorage.getItem("token");
-    
+
+    // ✅ List endpoint — returns an ARRAY of every section/endorsement
     const response = await fetch(
-      `${SERVER_URL}/grouplife/policies/policyNo/detail?policyNo=${encodeURIComponent(policyNo)}`,
+      `${SERVER_URL}/grouplife/policies/details?policyNo=${encodeURIComponent(policyNo)}`,
       {
         headers: {
           "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json",
-        }
+        },
       }
     );
 
@@ -319,43 +320,48 @@ const fetchDetail = async () => {
     }
 
     const data = await response.json();
-    setDetailData(data);
-    
-    const toItem = (d: any): PolicyDetailItem => ({
-      detailID: d.detailID,
+    const list: any[] = Array.isArray(data) ? data : [data];
+
+    const items: PolicyDetailItem[] = list.map((d: any, index: number) => ({
+      detailID: d.detailID ?? index,
       policyNo: d.policyNo || policyNo,
       endorsementNo: d.endorsementNo || "[AUTO]",
       certOrDocNo: d.certOrDocNo || "N/A",
       insuredName: d.insuredName || formData?.clientName || "N/A",
-      created: d.created || false,
+      created: d.created ?? false,
       sumInsured: d.sumInsured || 0,
       premium: d.grossPremium || d.netPremium || 0,
-      transDate: d.effectiveDate || d.submittedOn || formData?.transactionDate || new Date().toISOString(),
+      transDate: d.submittedOn || d.effectiveDate || formData?.transactionDate || new Date().toISOString(),
+      // Now populated from the list endpoint:
       endorsementType: d.endorsementType,
       completionStatus: d.completionStatus,
-      // The endorsement dialog validates its dates against the source section's cover period.
       effectiveDate: d.effectiveDate,
       expiryDate: d.expiryDate,
-    });
+      grossPremium: d.grossPremium,
+      netPremium: d.netPremium,
+      submittedBy: d.submittedBy,
+      submittedOn: d.submittedOn,
+    }));
 
-    // List every endorsement so a renewed (EXPIRED) source and its new RENEWAL row both show.
-    let items: PolicyDetailItem[] = [toItem(data)];
-    try {
-      const listRes = await fetch(
-        `${SERVER_URL}/grouplife/policies/details?policyNo=${encodeURIComponent(policyNo)}`,
-        { headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" } }
+    setPolicyDetails(items);           // ✅ ALL rows, not just one
+    setDetailData(items[0] ?? null);
+
+    // Members for the newest endorsement envelope
+    const activeItem = items[0];
+    if (activeItem?.endorsementNo && activeItem.endorsementNo !== "[AUTO]") {
+      const membersRes = await fetch(
+        `${SERVER_URL}/grouplife/policies/policie/members?policyNo=${encodeURIComponent(policyNo)}&endorsementNo=${encodeURIComponent(activeItem.endorsementNo)}`,
+        {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
       );
-      if (listRes.ok) {
-        const list = await listRes.json();
-        if (Array.isArray(list) && list.length > 0) items = list.map(toItem);
+      if (membersRes.ok) {
+        const membersData = await membersRes.json();
+        setMembers(membersData.members ?? membersData ?? []);
       }
-    } catch (e) {
-      console.error("Error fetching endorsement list:", e);
-    }
-    setPolicyDetails(items);
-    
-    if (data.members) {
-      setMembers(data.members);
     }
   } catch (error) {
     console.error("Error fetching detail:", error);
@@ -443,11 +449,9 @@ const fetchDetail = async () => {
   // Monitor endorsement creation status from Redux
   useEffect(() => {
     if (createdEndorsement) {
-      // Close dialog if open
       setEndorsementDialogOpen(false);
       setSelectedItemForEndorsement(null);
-      
-      // Success - show toast and navigate
+  
       toast({
         title: "Success!",
         description: (
@@ -461,21 +465,17 @@ const fetchDetail = async () => {
         variant: "default",
         duration: 5000,
       });
-      
-      // Navigate to the new endorsement details
-      const encodedPolicyNo = encodeURIComponent(createdEndorsement.policyNo);
-     
-      
-      // Clear processing state and reload so the renewed source row shows as Expired
+  
+      // 👇 ADD THIS — refresh the table so the new endorsement shows up
+      fetchDetail();
+  
       setProcessingEndorsement(null);
       fetchDetail();
     }
-
+  
     if (endorsementError) {
-      // Close dialog if open
       setEndorsementDialogOpen(false);
       setSelectedItemForEndorsement(null);
-      
       toast({
         title: "Error",
         description: endorsementError,
@@ -492,13 +492,7 @@ const fetchDetail = async () => {
    * Navigates to the DebitNote component with the policy number
    */
  const handleDebitNote = (item: PolicyDetailItem) => {
-    console.log('🔴 Navigate to DebitNote with:', {
-        policyNo: item.policyNo,
-        detailID: item.detailID,
-        endorsementNo: item.endorsementNo,
-        insuredName: item.insuredName,
-        sourcePage: "group-life-details"
-    });
+    
     
     const encodedPolicyNo = encodeURIComponent(item.policyNo);
     // back to this scheme on the Group Life Detail tab (keeps ?source=…)
@@ -539,7 +533,7 @@ const fetchDetail = async () => {
     setProcessingEndorsement(item.endorsementNo);
 
     try {
-      console.log(`🔄 Creating RENEWAL endorsement from ${item.endorsementNo} for policy ${item.policyNo}`);
+     
       
       // Dispatch the Redux thunk
       const resultAction = await dispatch(createEndorsement({
